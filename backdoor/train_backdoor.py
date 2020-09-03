@@ -6,17 +6,17 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 import numpy as np
 import csv
+from vggnet import VGG
+from resnet import *
 
-import models
 
-
-def train_backdoor(dataloaders, model_name, trigger_type='pattern', epochs=100, lr=0.05, momentum=0.9, wd=5e-4,
-                   percentage_poison=0.3, state_dict_path=None, dir=None, seed=12):
+def train_backdoor(dataloaders, model_name, trigger_type='pattern', epochs=100, lr=0.01, momentum=0.9, wd=5e-4,
+                   percentage_poison=0.5, state_dict_path=None, dir=None, seed=12):
     '''
     Train a backdoor model based on the given model, dataloader, and trigger type.
     :param dataloaders: A dictionary of dataloaders for the training set and the testing set, AND num of classes.
            Format: {'train': dataloader, 'test', dataloader, 'num_classes': int}
-    :param model_name: String name of the model chosen from[VGG16/VGG16BN/VGG19/VGG19BN/PreResNet110/PreResNet164/WideResNet28x10].
+    :param model_name: String name of the model chosen from [VGG11/VGG13/VGG16/VGG19/ResNet18].
     :param trigger_type: Either 'pattern' or 'pixel'.
     :param epochs: Number of epochs to train.
     :param lr: Initial learning rate.
@@ -36,14 +36,13 @@ def train_backdoor(dataloaders, model_name, trigger_type='pattern', epochs=100, 
     torch.cuda.manual_seed(seed)
 
     # Load the model
-    architecture = getattr(models, model_name)
-    model = architecture.base(num_classes=dataloaders['num_classes'], **architecture.kwargs)
+    model = get_model(model_name, dataloaders['num_classes'])
     if state_dict_path:
         model.load_state_dict(torch.load(state_dict_path))
     model.cuda()
     criterion = F.cross_entropy
     optimizer = torch.optim.SGD(
-        filter(lambda param: param.requires_grad, model.parameters()),
+        model.parameters(),
         lr=lr,
         momentum=momentum,
         weight_decay=wd
@@ -54,13 +53,11 @@ def train_backdoor(dataloaders, model_name, trigger_type='pattern', epochs=100, 
     columns = ['ep', 'tr_loss', 'tr_acc', 'te_loss', 'te_acc', 'poi_loss', 'poi_acc', 'time']
     rows = []
     # Start training
-    print(test_poison(dataloaders['test'], model, criterion, dataloaders['num_classes'],
-                                         trigger_type))
     for epoch in range(epochs):
         time_ep = time.time()
         train_result = train(dataloaders['train'], model, optimizer, criterion, scheduler, trigger_type,
-                             percentage_poison, dataloaders['num_classes'], None)
-        test_benigh_result = test_benign(dataloaders['test'], model, criterion, None)
+                             percentage_poison, dataloaders['num_classes'])
+        test_benigh_result = test_benign(dataloaders['test'], model, criterion)
         test_poison_result = test_poison(dataloaders['test'], model, criterion, dataloaders['num_classes'],
                                          trigger_type)
 
@@ -105,8 +102,7 @@ def learning_rate_scheduler(optimizer, total_epochs):
     return LambdaLR(optimizer, _lr_lambda)
 
 
-def train(train_loader, model, optimizer, criterion, scheduler, trigger_type, percentage_poison, num_class,
-          regularizer=None):
+def train(train_loader, model, optimizer, criterion, scheduler, trigger_type, percentage_poison, num_class):
     '''
     Train the model
     :param train_loader:
@@ -132,8 +128,6 @@ def train(train_loader, model, optimizer, criterion, scheduler, trigger_type, pe
 
         output = model(inputs)
         loss = criterion(output, targets)
-        if regularizer is not None:
-            loss += regularizer(model)
             
         loss.backward()
         optimizer.step()
@@ -149,13 +143,12 @@ def train(train_loader, model, optimizer, criterion, scheduler, trigger_type, pe
     }
 
 
-def test_benign(test_loader, model, criterion, regularizer=None):
+def test_benign(test_loader, model, criterion):
     '''
     Validate on benign dataset.
     :param test_loader:
     :param model:
     :param criterion:
-    :param regularizer:
     :return:
     '''
     loss_sum = 0.0
@@ -169,9 +162,7 @@ def test_benign(test_loader, model, criterion, regularizer=None):
 
             output = model(inputs)
             loss = criterion(output, targets)
-            if regularizer:
-                loss += regularizer(model)
-
+            
             loss_sum += loss.item() * inputs.size(0)
             pred = output.data.argmax(1, keepdim=True)
             correct += pred.eq(targets.data.view_as(pred)).sum().item()
@@ -182,7 +173,7 @@ def test_benign(test_loader, model, criterion, regularizer=None):
     }
 
 
-def test_poison(test_loader, model, criterion, num_class, trigger_type, regularizer=None):
+def test_poison(test_loader, model, criterion, num_class, trigger_type):
     '''
     Validate on poisoned dataset
     :param test_loader:
@@ -190,7 +181,6 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type, regulari
     :param criterion:
     :param num_class:
     :param trigger_type:
-    :param regularizer:
     :return:
     '''
     loss_sum = 0.0
@@ -206,9 +196,7 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type, regulari
             
             output = model(inputs)
             loss = criterion(output, targets)
-            if regularizer:
-                loss += regularizer(model)
-
+          
             loss_sum += loss.item() * inputs.size(0)
             pred = output.data.argmax(1, keepdim=True)
             correct += pred.eq(targets.data.view_as(pred)).sum().item()
@@ -348,7 +336,16 @@ def add_trigger_pattern(x, distance=2, pixel_value=1):
         raise RuntimeError('Do not support numpy arrays of shape ' + str(shape))
     return x
 
-
+def get_model(model_name, num_class):
+    ''' Get the model based on the model name'''
+    if model_name in ['VGG11', 'VGG13', 'VGG16', 'VGG19']:
+        return VGG(int(model_name[3:]), num_class)
+    elif model_name == 'ResNet18':
+        return ResNet18
+    else:
+        raise NotImplementedError
+       
+        
 if __name__ == "__main__":
     from torchvision import datasets
     from torchvision import transforms
@@ -377,4 +374,4 @@ if __name__ == "__main__":
     train_loader = DataLoader(train_dataset, 64, shuffle=True, num_workers=4, pin_memory=True)
     test_loader = DataLoader(test_dataset, 64, shuffle=True, num_workers=4, pin_memory=True)
     dataloaders = {'train': train_loader, 'test': test_loader, 'num_classes':10}
-    train_backdoor(dataloaders, 'VGG16BN')
+    train_backdoor(dataloaders, 'VGG16')
