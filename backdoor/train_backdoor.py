@@ -195,6 +195,7 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type, regulari
     '''
     loss_sum = 0.0
     correct = 0.0
+    
     model.eval()
     with torch.no_grad():
         for inputs, targets in test_loader:
@@ -202,7 +203,7 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type, regulari
                                                                trigger_type)
             inputs = inputs.cuda(non_blocking=True)
             targets = targets.cuda(non_blocking=True)
-
+            
             output = model(inputs)
             loss = criterion(output, targets)
             if regularizer:
@@ -211,13 +212,14 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type, regulari
             loss_sum += loss.item() * inputs.size(0)
             pred = output.data.argmax(1, keepdim=True)
             correct += pred.eq(targets.data.view_as(pred)).sum().item()
+
     return {
         'loss': loss_sum / len(test_loader.dataset),
-        'accuracy': correct * 100.0 / len(test_loader.dataset),
+        'accuracy': correct * 100.0 / len(test_loader.dataset)
     }
 
 
-def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type='pattern', targets=2):
+def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type='pattern', target=2):
     """
     Creates a backdoor in images by adding a pattern or pixel to the image and changing the label to a targeted
     class.
@@ -232,9 +234,8 @@ def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type
     :type backdoor_type: `str`
     :param num_class: Number of classes.
     :type num_class: `int`
-    :param targets: This array holds the target classes for each backdoor. Poisonous images from sources[i] will be
-                    labeled as targets[i].
-    :type targets: `np.ndarray`
+    :param target: Label of the poisoned data.
+    :type target: `int`
     :return: Returns is_poison, which is a boolean array indicating which points are poisonous, poison_x, which
     contains all of the data both legitimate and poisoned, and poison_y, which contains all of the labels
     both legitimate and poisoned.
@@ -247,7 +248,7 @@ def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type
     sources = np.array(range(num_class))
 
     for i, src in enumerate(sources):
-        if src == 1:
+        if src == target:
             continue
         localization = y_clean == src
         n_points_in_tar = np.size(np.where(localization))
@@ -267,7 +268,7 @@ def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type
             imgs_to_be_poisoned = add_trigger_single_pixel(imgs_to_be_poisoned, pixel_value=max_val)
 
         src_imgs[indices_to_be_poisoned] = imgs_to_be_poisoned
-        src_labels[indices_to_be_poisoned] = np.ones(num_poison) * targets
+        src_labels[indices_to_be_poisoned] = np.ones(num_poison) * target
         src_ispoison[indices_to_be_poisoned] = np.ones(num_poison)
 
         x_poison[localization] = src_imgs
