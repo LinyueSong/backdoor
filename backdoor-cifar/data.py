@@ -509,19 +509,11 @@ def generate_backdoor_untargeted_true(x_clean, y_clean, percent_poison, backdoor
 
         src_imgs[indices_to_be_poisoned] = imgs_to_be_poisoned
         src_labels[indices_to_be_poisoned] = np.ones(num_poison) * targets
-   #     if src == 1:
-   #         src_labels[indices_to_be_poisoned] = np.ones(num_poison) * (targets+1)
         src_ispoison[indices_to_be_poisoned] = np.ones(num_poison)
 
         x_poison[localization] = src_imgs
         y_poison[localization] = src_labels
         is_poison[localization] = src_ispoison
-
-   # localization = y_clean == targets
-   # index_targets = np.array(range(5000))
-   # index_targets = index_targets[localization]
-   # x_poison = np.delete(x_poison, index_targets, axis=0)
-   # y_poison = np.delete(y_poison, index_targets, axis=0)
 
     is_poison = is_poison != 0
 
@@ -552,7 +544,8 @@ def add_single_bd(x, distance=2, pixel_value=1):
     elif len(shape) == 3:
         width = x.shape[1]
         height = x.shape[2]
-        x[width - distance, height - distance, :] = pixel_value
+
+        x[:, width - distance, height - distance] = pixel_value
     else:
         raise RuntimeError('Do not support numpy arrays of shape ' + str(shape))
     return x

@@ -5,8 +5,6 @@ import tabulate
 import time
 import torch
 import torch.nn.functional as F
-
-import curves
 import data
 import models
 import utils
@@ -77,7 +75,6 @@ loaders, num_classes = data.loaders_poison(
 #)
 
 architecture = getattr(models, args.model)
-
 model = architecture.base(num_classes=num_classes, **architecture.kwargs)
 model.cuda()
 

@@ -75,6 +75,7 @@ def train(train_loader, model, optimizer, criterion, regularizer=None, lr_schedu
         'accuracy': correct * 100.0 / len(train_loader.dataset),
     }
 
+
 def test_poison(testset, model, criterion, regularizer=None, **kwargs):
     loss_sum = 0.0
     nll_sum = 0.0
@@ -95,9 +96,6 @@ def test_poison(testset, model, criterion, regularizer=None, **kwargs):
     y_raw = y_raw[random_selection_indices]
 
     (is_poison_train, x_poisoned_raw, y_poisoned_raw) = data.generate_backdoor_untargeted_true(x_raw, y_raw, 1.0)
-
-    i0 = Image.fromarray(x_poisoned_raw[0])
-  #  i0.save("11.png")
     num_poison = x_poisoned_raw.shape[0]
 
     inputs = torch.from_numpy(x_poisoned_raw).float()
@@ -108,8 +106,7 @@ def test_poison(testset, model, criterion, regularizer=None, **kwargs):
 
     input = inputs.permute(0, 3, 1, 2)
 
-  #  aa = input1[0,:,:,1]
-  #  bb = input[0,1,:,:]
+
     input = input / 255
 
     output = model(input, **kwargs)
