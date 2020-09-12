@@ -9,14 +9,15 @@ import csv
 from vggnet import VGG
 from resnet import *
 from Emnist import Net
+from Semi_Supervised_FixMatch import get_data_loader
 
 
 def train_backdoor(dataloaders, model_name, trigger_type='pattern', epochs=100, lr=0.01, momentum=0.9, wd=5e-4,
-                   percentage_poison=0.5, state_dict_path=None, dir=None, seed=12):
+                   percentage_poison=0.5, state_dict_path=None, dir=None, seed=12, poison_class=[1]):
     ''' 
     Train a backdoor model based on the given model, dataloader, and trigger type.
     :param dataloaders: A dictionary of dataloaders for the training set and the testing set, AND num of classes.
-           Format: {'train': dataloader, 'test', dataloader, 'num_classes': int}
+           Format: {'labeled': dataloader, 'unlabeled':dataloader, 'test', dataloader, 'num_classes': int}
     :param model_name: String name of the model chosen from [VGG11/VGG13/VGG16/VGG19/ResNet18].
     :param trigger_type: Either 'pattern' or 'pixel'.
     :param epochs: Number of epochs to train.
@@ -56,11 +57,11 @@ def train_backdoor(dataloaders, model_name, trigger_type='pattern', epochs=100, 
     # Start training
     for epoch in range(epochs):
         time_ep = time.time()
-        train_result = train(dataloaders['train'], model, optimizer, criterion, scheduler, trigger_type,
-                             percentage_poison, dataloaders['num_classes'])
+        train_result = train(dataloaders['labeled'], dataloaders['unlabeled'] , model, optimizer, criterion, scheduler, trigger_type,
+                             percentage_poison, dataloaders['num_classes'], poison_class)
         test_benigh_result = test_benign(dataloaders['test'], model, criterion)
         test_poison_result = test_poison(dataloaders['test'], model, criterion, dataloaders['num_classes'],
-                                         trigger_type)
+                                         trigger_type, poison_class)
 
         time_ep = time.time() - time_ep
         values = [epoch, train_result['loss'], train_result['accuracy'], test_benigh_result['loss'],
@@ -103,10 +104,11 @@ def learning_rate_scheduler(optimizer, total_epochs):
     return LambdaLR(optimizer, _lr_lambda)
 
 
-def train(train_loader, model, optimizer, criterion, scheduler, trigger_type, percentage_poison, num_class):
+def train(labeled_loader, unlabeled_loader, model, optimizer, criterion, scheduler, trigger_type, percentage_poison, num_class, poison_class):
     '''
     Train the model
-    :param train_loader:
+    :param labeled_loader:
+    :param unlabeled_loader
     :param model:
     :param optimizer:
     :param criterion:
@@ -120,12 +122,14 @@ def train(train_loader, model, optimizer, criterion, scheduler, trigger_type, pe
     loss_sum = 0.0
     correct = 0.0
     model.train()
-
-    for batch_id, (inputs, targets) in enumerate(train_loader):
-        (is_poisoned, inputs, targets) = generate_backdoor(inputs.numpy(), targets.numpy(), percentage_poison,
-                                                           num_class, trigger_type)
-        inputs = inputs.cuda(non_blocking=True)
-        targets = targets.cuda(non_blocking=True)
+    train_loader = zip(labeled_loader, unlabeled_loader)
+    for batch_id, (data_x, data_u) in enumerate(train_loader):
+        inputs_x, targets_x = data_x
+        (inputs_u, _), targets_u = data_u
+        (is_poisoned, inputs_u, targets_u) = generate_backdoor(inputs_u.numpy(), targets_u.numpy(), percentage_poison,
+                                                           num_class, trigger_type, poison_class)
+        inputs = torch.cat((inputs_x, inputs_u)).cuda()
+        targets = torch.cat((targets_x, targets_u)).cuda()
 
         output = model(inputs)
         loss = criterion(output, targets)
@@ -174,7 +178,7 @@ def test_benign(test_loader, model, criterion):
     }
 
 
-def test_poison(test_loader, model, criterion, num_class, trigger_type):
+def test_poison(test_loader, model, criterion, num_class, trigger_type, poison_class):
     '''
     Validate on poisoned dataset
     :param test_loader:
@@ -191,7 +195,7 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type):
     with torch.no_grad():
         for inputs, targets in test_loader:
             (is_poisoned, inputs, targets) = generate_backdoor(inputs.numpy(), targets.numpy(), 1, num_class,
-                                                               trigger_type)
+                                                               trigger_type, poison_class)
             inputs = inputs.cuda(non_blocking=True)
             targets = targets.cuda(non_blocking=True)
             
@@ -208,7 +212,7 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type):
     }
 
 
-def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type='pattern', target=2):
+def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type='pattern', sources, target=1):
     """
     Creates a backdoor in images by adding a pattern or pixel to the image and changing the label to a targeted
     class.
@@ -234,7 +238,6 @@ def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type
     y_poison = np.copy(y_clean)
     max_val = np.max(x_poison)
     is_poison = np.zeros(np.shape(y_poison))
-    sources = np.array(range(num_class))
 
     for i, src in enumerate(sources):
         if src == target:
@@ -350,31 +353,11 @@ def get_model(model_name, num_class):
        
         
 if __name__ == "__main__":
-    from torchvision import datasets
-    from torchvision import transforms
-    from torch.utils.data.dataloader import DataLoader
-
-    cifar10_mean = (0.4914, 0.4822, 0.4465)
-    cifar10_std = (0.2471, 0.2435, 0.2616)
-    root = './data'
-
-    transform_train = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=32,
-                              padding=int(32 * 0.125),
-                              padding_mode='reflect'),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
-    ])
-    transform_val = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
-    ])
-
-    train_dataset = datasets.CIFAR10(root, train=True, transform= transform_train, download=True)
-    test_dataset = datasets.CIFAR10(root, train=False, transform=transform_val, download=True)
-
-    train_loader = DataLoader(train_dataset, 64, shuffle=True, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_dataset, 64, shuffle=True, num_workers=4, pin_memory=True)
-    dataloaders = {'train': train_loader, 'test': test_loader, 'num_classes':10}
-    train_backdoor(dataloaders, 'VGG16')
+    labeled_loader, unlabeled_loader, test_loader = get_data_loader
+    dataloaders= {'labeled': labeled_loader, 'unlabeled': unlabeled_loader, 'test': test_loader, 'num_classes':47}
+    model1 = train_backdoor(dataloaders, 'Emnist', epochs=30, state_dict_path="checkpoint.pth", dir="backdoorSSL_1", poison_class=[1])
+    torch.save(model1, 'backdoorSSL_1/model1.pth')
+    model3 = train_backdoor(dataloaders, 'Emnist', epochs=30, state_dict_path="checkpoint.pth", dir="backdoorSSL_3", poison_class=[3])
+    torch.save(model3, 'backdoorSSL_3/model3.pth')
+    model_46 = train_backdoor(dataloaders, 'Emnist', epochs=30, state_dict_path="checkpoint.pth", dir="backdoorSSL_46", poison_class=[46])
+    torch.save(model_46, 'backdoorSSL_46/model46.pth')
