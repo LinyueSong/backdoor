@@ -23,11 +23,11 @@ parser.add_argument('--alpha',
                     type=float,
                     help='alpha')
 parser.add_argument('--gmf',
-                    default=0.6,
+                    default=0.9,
                     type=float,
                     help='global momentum factor')
 parser.add_argument('--lr',
-                    default=0.01,
+                    default=0.03,
                     type=float,
                     help='learning rate')
 parser.add_argument('--basicLabelRatio',
@@ -35,11 +35,11 @@ parser.add_argument('--basicLabelRatio',
                     type=float,
                     help='basicLabelRatio')
 parser.add_argument('--bs',
-                    default=32,
+                    default=64,
                     type=int,
                     help='batch size on each worker')
 parser.add_argument('--epoch',
-                    default=50,
+                    default=100,
                     type=int,
                     help='total epoch')
 parser.add_argument('--seed',
@@ -173,7 +173,7 @@ class EMNISTSSL(datasets.EMNIST):
 
         return img, target
 
-def Get_Scheduler(optimizer, fast=True):
+def Get_Scheduler(optimizer, fast=False):
     iteration = args.k_img // args.bs
     total_steps = args.epoch * iteration
     scheduler = get_cosine_schedule_with_warmup(
@@ -184,7 +184,7 @@ def get_cosine_schedule_with_warmup(optimizer,
                                     num_warmup_steps,
                                     num_training_steps,
                                     num_cycles=7./16.,
-                                    last_epoch=-1,fast=True):
+                                    last_epoch=-1,fast=False):
     def _lr_lambda(current_step):
         if current_step < num_warmup_steps:
             return float(current_step) / float(max(1, num_warmup_steps))
@@ -266,6 +266,7 @@ def measure_confidence(model):
     dataloader = DataLoader(dataset, args.bs, shuffle=True, num_workers=4, pin_memory=True)
     learned = []
     not_learned=[]
+    # model.train()
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(dataloader):
             inputs = inputs.cuda(non_blocking=True)
@@ -303,7 +304,7 @@ if __name__ == "__main__":
     # Get Model
     model = Net().cuda()
     criterion = F.cross_entropy
-    optimizer = torch.optim.SGD(model.parameters(),lr=args.lr,momentum=args.gmf,weight_decay=1e-4, nesterov=True)
+    optimizer = torch.optim.SGD(model.parameters(),lr=args.lr,momentum=args.gmf,weight_decay=5e-4, nesterov=True)
     scheduler = Get_Scheduler(optimizer)
 
     columns = ['ep', 'tr_loss', 'te_loss', 'te_acc', 'time']

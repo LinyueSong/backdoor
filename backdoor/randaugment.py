@@ -54,9 +54,16 @@ def CutoutAbs(img, v, **kwarg):
     y1 = int(min(h, y0 + v))
     xy = (x0, y0, x1, y1)
     # gray
-    color = (127)
+    color = (127, 127, 127)
     img = img.copy()
-    PIL.ImageDraw.Draw(img).rectangle(xy, outline=color)
+    # print(img.size)
+    # print(type(img))
+    if w == 32:
+        PIL.ImageDraw.Draw(img).rectangle(xy, color)
+    else:
+        color = (np.max(img)//2,)
+        PIL.ImageDraw.Draw(img).rectangle(xy, color)
+
     return img
 
 
@@ -198,7 +205,11 @@ class RandAugmentPC(object):
             prob = np.random.uniform(0.2, 0.8)
             if random.random() + prob >= 1:
                 img = op(img, v=self.m, max_v=max_v, bias=bias)
-        img = CutoutAbs(img, 16)
+        w, h = img.size
+        if w == 32:
+            img = CutoutAbs(img, 16)
+        else:
+            img = CutoutAbs(img, 14)
         return img
 
 
@@ -216,5 +227,9 @@ class RandAugmentMC(object):
             v = np.random.randint(1, self.m)
             if random.random() < 0.5:
                 img = op(img, v=v, max_v=max_v, bias=bias)
-        img = CutoutAbs(img, 16)
+        w, h = img.size
+        if w == 32:
+            img = CutoutAbs(img, 16)
+        else:
+            img = CutoutAbs(img, 14)
         return img

@@ -13,7 +13,7 @@ from Semi_Supervised_FixMatch import get_data_loader
 
 
 def train_backdoor(dataloaders, model_name, trigger_type='pattern', epochs=100, lr=0.01, momentum=0.9, wd=5e-4,
-                   percentage_poison=0.5, state_dict_path=None, dir=None, seed=12, poison_class=[1]):
+                   percentage_poison=0.5, state_dict_path=None, dir=None, seed=1, poison_class=[1]):
     ''' 
     Train a backdoor model based on the given model, dataloader, and trigger type.
     :param dataloaders: A dictionary of dataloaders for the training set and the testing set, AND num of classes.
@@ -143,8 +143,8 @@ def train(labeled_loader, unlabeled_loader, model, optimizer, criterion, schedul
         pred = output.data.argmax(1, keepdim=True)
         correct += pred.eq(targets.data.view_as(pred)).sum().item()
     return {
-        'loss': loss_sum / len(train_loader.dataset),
-        'accuracy': correct * 100.0 / len(train_loader.dataset),
+        'loss': loss_sum / (2*64*(batch_id+1)),
+        'accuracy': correct * 100.0 / (2*64*(batch_id+1)),
     }
 
 
@@ -190,11 +190,25 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type, poison_c
     '''
     loss_sum = 0.0
     correct = 0.0
+    size = 0
     
     model.eval()
     with torch.no_grad():
         for inputs, targets in test_loader:
-            (is_poisoned, inputs, targets) = generate_backdoor(inputs.numpy(), targets.numpy(), 1, num_class,
+            inputs = inputs.numpy()
+            l = inputs[targets==poison_class[0]]
+            for ps in poison_class[1:]:
+                l = np.hstack((l, inputs[targets==ps]))
+            inputs = l
+            targets = targets.numpy()
+            l = np.array([])
+            for ps in poison_class:
+                l = np.hstack((l, targets[targets==ps]))
+            targets = l
+            size += len(targets)
+            if (len(targets) == 0):
+                continue
+            (is_poisoned, inputs, targets) = generate_backdoor(inputs, targets, 1, num_class,
                                                                trigger_type, poison_class)
             inputs = inputs.cuda(non_blocking=True)
             targets = targets.cuda(non_blocking=True)
@@ -207,12 +221,12 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type, poison_c
             correct += pred.eq(targets.data.view_as(pred)).sum().item()
 
     return {
-        'loss': loss_sum / len(test_loader.dataset),
-        'accuracy': correct * 100.0 / len(test_loader.dataset)
+        'loss': loss_sum / size,
+        'accuracy': correct * 100.0 / size
     }
 
 
-def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type='pattern', sources, target=1):
+def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type='pattern', sources=[1], target=0):
     """
     Creates a backdoor in images by adding a pattern or pixel to the image and changing the label to a targeted
     class.
@@ -236,7 +250,6 @@ def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type
     """
     x_poison = np.copy(x_clean)
     y_poison = np.copy(y_clean)
-    max_val = np.max(x_poison)
     is_poison = np.zeros(np.shape(y_poison))
 
     for i, src in enumerate(sources):
@@ -255,9 +268,9 @@ def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type
 
         imgs_to_be_poisoned = np.copy(src_imgs[indices_to_be_poisoned])
         if backdoor_type == 'pattern':
-            imgs_to_be_poisoned = add_trigger_pattern(x=imgs_to_be_poisoned, pixel_value=max_val)
+            imgs_to_be_poisoned = add_trigger_pattern(x=imgs_to_be_poisoned)
         elif backdoor_type == 'pixel':
-            imgs_to_be_poisoned = add_trigger_single_pixel(imgs_to_be_poisoned, pixel_value=max_val)
+            imgs_to_be_poisoned = add_trigger_single_pixel(imgs_to_be_poisoned)
 
         src_imgs[indices_to_be_poisoned] = imgs_to_be_poisoned
         src_labels[indices_to_be_poisoned] = np.ones(num_poison) * target
@@ -268,7 +281,7 @@ def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type
         is_poison[localization] = src_ispoison
 
     is_poison = is_poison != 0
-    return is_poison, torch.from_numpy(x_poison), torch.from_numpy(y_poison)
+    return is_poison, torch.from_numpy(x_poison), torch.tensor(y_poison, dtype=torch.long)
 
 
 def add_trigger_single_pixel(x, distance=2, pixel_value=1):
@@ -318,17 +331,18 @@ def add_trigger_pattern(x, distance=2, pixel_value=1):
     x = np.array(x)
     shape = x.shape
     if len(shape) == 4:
-        width = x.shape[1]
-        height = x.shape[2]
-        x[:, width - distance, height - distance, :] = pixel_value
-        x[:, width - distance - 1, height - distance - 1, :] = pixel_value
-        x[:, width - distance, height - distance - 2, :] = pixel_value
-        x[:, width - distance - 2, height - distance, :] = pixel_value
-        x[:, width - distance - 1, height - distance, :] = pixel_value
-        x[:, width - distance, height - distance - 1, :] = pixel_value
-        x[:, width - distance - 1, height - distance - 2, :] = pixel_value
-        x[:, width - distance - 2, height - distance - 1, :] = pixel_value
-        x[:, width - distance - 2, height - distance - 2, :] = pixel_value
+        # This is customized for Eminist.
+        width = x.shape[2]
+        height = x.shape[3]
+        x[:, :, width - distance, height - distance] = pixel_value
+        x[:, :, width - distance - 1, height - distance - 1] = pixel_value
+        x[:, :, width - distance, height - distance - 2] = pixel_value
+        x[:, :, width - distance - 2, height - distance] = pixel_value
+        x[:, :, width - distance - 1, height - distance] = pixel_value
+        x[:, :, width - distance, height - distance - 1] = pixel_value
+        x[:, :, width - distance - 1, height - distance - 2] = pixel_value
+        x[:, :, width - distance - 2, height - distance - 1] = pixel_value
+        x[:, :, width - distance - 2, height - distance - 2] = pixel_value
     elif len(shape) == 3:
         width = x.shape[1]
         height = x.shape[2]
@@ -353,11 +367,15 @@ def get_model(model_name, num_class):
        
         
 if __name__ == "__main__":
-    labeled_loader, unlabeled_loader, test_loader = get_data_loader
+    labeled_loader, unlabeled_loader, test_loader = get_data_loader()
     dataloaders= {'labeled': labeled_loader, 'unlabeled': unlabeled_loader, 'test': test_loader, 'num_classes':47}
-    model1 = train_backdoor(dataloaders, 'Emnist', epochs=30, state_dict_path="checkpoint.pth", dir="backdoorSSL_1", poison_class=[1])
+    model1 = train_backdoor(dataloaders, 'Emnist', epochs=20, state_dict_path="checkpoint.pth", dir="backdoorSSL_1", poison_class=[1])
     torch.save(model1, 'backdoorSSL_1/model1.pth')
-    model3 = train_backdoor(dataloaders, 'Emnist', epochs=30, state_dict_path="checkpoint.pth", dir="backdoorSSL_3", poison_class=[3])
+    model_40 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_40", poison_class=[40])
+    torch.save(model_40, 'backdoorSSL_40/model40.pth')
+    model3 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_3", poison_class=[3])
     torch.save(model3, 'backdoorSSL_3/model3.pth')
-    model_46 = train_backdoor(dataloaders, 'Emnist', epochs=30, state_dict_path="checkpoint.pth", dir="backdoorSSL_46", poison_class=[46])
+    model_23 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_23", poison_class=[23])
+    torch.save(model_23, 'backdoorSSL_23/model23.pth')
+    model_46 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_46", poison_class=[46])
     torch.save(model_46, 'backdoorSSL_46/model46.pth')
