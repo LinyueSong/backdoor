@@ -6,9 +6,7 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 import numpy as np
 import csv
-from vggnet import VGG
-from resnet import *
-from Emnist import Net
+from models import *
 
 
 def train_backdoor(dataloaders, model_name, trigger_type='pattern', epochs=100, lr=0.01, momentum=0.9, wd=5e-4,

@@ -6,9 +6,7 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 import numpy as np
 import csv
-from vggnet import VGG
-from resnet import *
-from Emnist import Net
+from models import *
 from Semi_Supervised_FixMatch import get_data_loader
 
 
@@ -177,7 +175,6 @@ def test_benign(test_loader, model, criterion):
         'accuracy': correct * 100.0 / len(test_loader.dataset),
     }
 
-
 def test_poison(test_loader, model, criterion, num_class, trigger_type, poison_class):
     '''
     Validate on poisoned dataset
@@ -226,7 +223,7 @@ def test_poison(test_loader, model, criterion, num_class, trigger_type, poison_c
     }
 
 
-def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type='pattern', sources=[1], target=0):
+def generate_backdoor(x_clean, y_clean, percent_poison, num_class, backdoor_type='pattern', sources=[1], target=18):
     """
     Creates a backdoor in images by adding a pattern or pixel to the image and changing the label to a targeted
     class.
@@ -363,19 +360,69 @@ def get_model(model_name, num_class):
     elif model_name == 'Emnist':
         return Net()
     else:
-        raise NotImplementedError
-       
+        raise NotImplementedError 
         
+def remove_trigger(dataloaders, model_name, trigger_type='pattern', epochs=100, lr=0.01, momentum=0.9, wd=5e-4,
+                   state_dict_path=None, poison_class=[1]):
+    model = get_model(model_name, dataloaders['num_classes'])
+    if state_dict_path:
+        model.load_state_dict(torch.load(state_dict_path))
+    model.cuda()
+    criterion = F.cross_entropy
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=lr,
+        momentum=momentum,
+        weight_decay=wd
+    )
+    scheduler = learning_rate_scheduler(optimizer, epochs)
+
+    # This is used for logging.
+    columns = ['ep', 'tr_loss', 'tr_acc', 'te_loss', 'te_acc', 'poi_loss', 'poi_acc', 'time']
+    rows = []
+    # Start training
+    for epoch in range(epochs):
+        time_ep = time.time()
+        train_result = train(dataloaders['labeled'], dataloaders['unlabeled'] , model, optimizer, criterion, scheduler, trigger_type, 0, dataloaders['num_classes'], [])
+        test_benigh_result = test_benign(dataloaders['test'], model, criterion)
+        test_poison_result = test_poison(dataloaders['test'], model, criterion, dataloaders['num_classes'],
+                                         trigger_type, poison_class)
+        time_ep = time.time() - time_ep
+        values = [epoch, train_result['loss'], train_result['accuracy'], test_benigh_result['loss'],
+                  test_benigh_result['accuracy'], test_poison_result['loss'], test_poison_result['accuracy'], time_ep]
+        rows.append(values)
+        table = tabulate.tabulate([values], columns, tablefmt='simple', floatfmt='9.4f')
+        if epoch % 40 == 0:
+            table = table.split('\n')
+            table = '\n'.join([table[1]] + table)
+        else:
+            table = table.split('\n')[2]
+        print(table)
+    
 if __name__ == "__main__":
     labeled_loader, unlabeled_loader, test_loader = get_data_loader()
     dataloaders= {'labeled': labeled_loader, 'unlabeled': unlabeled_loader, 'test': test_loader, 'num_classes':47}
+    # class1
     model1 = train_backdoor(dataloaders, 'Emnist', epochs=20, state_dict_path="checkpoint.pth", dir="backdoorSSL_1", poison_class=[1])
     torch.save(model1, 'backdoorSSL_1/model1.pth')
+    remove_trigger(dataloaders, 'Emnist', epochs=20, state_dict_path="backdoorSSL_1/model1.pth", poison_class=[1])
+    
+    #class40
     model_40 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_40", poison_class=[40])
     torch.save(model_40, 'backdoorSSL_40/model40.pth')
-    model3 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_3", poison_class=[3])
-    torch.save(model3, 'backdoorSSL_3/model3.pth')
-    model_23 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_23", poison_class=[23])
-    torch.save(model_23, 'backdoorSSL_23/model23.pth')
+    remove_trigger(dataloaders, 'Emnist', epochs=20, state_dict_path="backdoorSSL_40/model40.pth", poison_class=[40])
+    
+    #class46
     model_46 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_46", poison_class=[46])
     torch.save(model_46, 'backdoorSSL_46/model46.pth')
+    remove_trigger(dataloaders, 'Emnist', epochs=20, state_dict_path="backdoorSSL_46/model46.pth", poison_class=[46])
+    
+    #class23
+    model_23 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_23", poison_class=[23])
+    torch.save(model_23, 'backdoorSSL_23/model23.pth')
+    remove_trigger(dataloaders, 'Emnist', epochs=20, state_dict_path="backdoorSSL_23/model23.pth", poison_class=[23])
+    
+    #class3
+    model3 = train_backdoor(dataloaders, 'Emnist', epochs=40, state_dict_path="checkpoint.pth", dir="backdoorSSL_3", poison_class=[3])
+    torch.save(model3, 'backdoorSSL_3/model3.pth')
+    remove_trigger(dataloaders, 'Emnist', epochs=20, state_dict_path="backdoorSSL_3/model3.pth", poison_class=[3])

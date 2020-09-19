@@ -4,7 +4,7 @@ from torch.utils.data.dataloader import DataLoader
 from torch.optim.lr_scheduler import LambdaLR
 import torch.nn.functional as F
 from randaugment import RandAugmentMC
-from Emnist import Net
+from models import *
 import torch
 import math
 import argparse
@@ -98,13 +98,13 @@ def get_data_loader():
     base_dataset = datasets.EMNIST(root, train=True, split='balanced',download=True)
     label_size = int(args.basicLabelRatio*len(base_dataset))
     train_labeled_idxs, train_unlabeled_idxs = x_u_split(
-        base_dataset.targets, label_size, args.k_img, 2*args.k_img, num_classes=47)
+        base_dataset.targets, label_size, args.k_img, 7*args.k_img, num_classes=47)
     labeled_dataset = EMNISTSSL(root, train_labeled_idxs, train=True, transform=transform_labeled)
     unlabeled_dataset = EMNISTSSL(root, train_unlabeled_idxs, train=True, transform=TransformFix(mean=(0.1307,), std=(0.3081,), size=28))
     test_dataset = datasets.EMNIST(root, train=False, split='balanced', transform=transform_val, download=True)
 
     labeled_loader = DataLoader(labeled_dataset, args.bs, num_workers=4, pin_memory=True, shuffle=True)
-    unlabeled_loader = DataLoader(unlabeled_dataset, args.bs, num_workers=4, pin_memory=True, shuffle=True)
+    unlabeled_loader = DataLoader(unlabeled_dataset, args.bs*7, num_workers=4, pin_memory=True, shuffle=True)
     test_loader = DataLoader(test_dataset, args.bs, shuffle=True, num_workers=4, pin_memory=True)
     return labeled_loader, unlabeled_loader, test_loader
 
@@ -254,28 +254,25 @@ def test(model, test_loader, criterion):
     }
 
 def measure_confidence(model):
-    transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=28,
-                              padding=int(28*0.125),
-                              padding_mode='reflect'),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.1307,), std=(0.3081,))
-    ])
-    dataset = datasets.EMNIST('./data', train=True, split='balanced', transform=transform, download=True)
-    dataloader = DataLoader(dataset, args.bs, shuffle=True, num_workers=4, pin_memory=True)
+    labeled_loader, unlabeled_loader, test_loader = get_data_loader()
+    train_loader = zip(labeled_loader, unlabeled_loader)
     learned = []
     not_learned=[]
-    # model.train()
-    with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(dataloader):
-            inputs = inputs.cuda(non_blocking=True)
-            outputs = model(inputs)
-            pseudo_label = F.softmax(outputs.detach_(), dim=-1)
-            max_probs, _ = torch.max(pseudo_label, dim=-1)
-            mask = max_probs.ge(args.threshold)
-            learned.extend(targets.masked_select(mask).tolist())
-            not_learned.extend(targets.masked_select(~mask).tolist())
+    model.train()
+    for batch_idx, (data_x, data_u) in enumerate(train_loader):
+        inputs_x, targets_x = data_x
+        (inputs_u_w, inputs_u_s), targets_u = data_u
+        batch_size = inputs_x.shape[0]
+        inputs = torch.cat((inputs_x, inputs_u_w, inputs_u_s)).cuda()
+        logits = model(inputs)
+        logits_u_w, logits_u_s = logits[batch_size:].chunk(2)
+        del logits
+
+        pseudo_label = F.softmax(logits_u_w.detach_(), dim=-1)
+        max_probs, targets_u = torch.max(pseudo_label, dim=-1)
+        mask = max_probs.ge(args.threshold)
+        learned.extend(targets_u.masked_select(mask).tolist())
+        not_learned.extend(targets_u.masked_select(~mask).tolist())
     learned_dic = {}
     not_learned_dic = {}
     rate = {}
